@@ -1,0 +1,9 @@
+pandas
+Pillow
+huggingface-hub
+transformers
+torch>=2.6.0
+torchvision
+tqdm
+numpy
+pyinstaller

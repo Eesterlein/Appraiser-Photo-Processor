@@ -1,0 +1,61 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+**/.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+mls_photo_processor.log
+**/*.log
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.spec.bak
+
+# Hugging Face cache directories
+.cache/
+**/.cache/huggingface/
+~/.cache/huggingface/
+huggingface_cache/
+**/huggingface_cache/
+
+# Project specific
+data/account_lookup_cleaned.csv
+classifier_model/
+
+# Browser profiles and scraping artifacts (legacy)
+data/browser_profile/
+data/zillow_cookies.json
+**/browser_profile/
+**/*_cookies.json
+
+# Playwright (legacy, no longer used but keep for safety)
+.playwright/
+
+# Output directories (user created)
+output/
+scraped_images/
+processed/
+**/processed/
+
+
