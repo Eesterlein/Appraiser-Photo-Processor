@@ -1,5 +1,6 @@
 """Three-layer image classification: Hard rules → Heuristics → Hugging Face fallback."""
 import logging
+from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 from PIL import Image
 import torch
@@ -478,24 +479,35 @@ class ImageClassifier:
 
 
 class AppraisalClassifier:
-    """Zero-shot CLIP classifier for appraiser exterior property photos."""
+    """
+    Hybrid classifier for appraiser exterior property photos.
 
-    CONFIDENCE_THRESHOLD = 0.65
+    Primary: Claude Vision API (accurate, understands context + compass direction).
+    Fallback: CLIP zero-shot (used when API key is unavailable).
+    """
 
-    SCENE_PROMPTS = {
-        'FRONT OF HOUSE': 'a photo of the front facade of a residential property',
-        'BACK OF HOUSE': 'a photo of the back of a residential property',
-        'CORNER': 'a photo of the corner angle of a residential house exterior',
-        'DRIVEWAY': 'a photo of a residential driveway or vehicle approach',
-        'GARAGE': 'a photo of a residential garage or carport',
-        'SHED': 'a photo of a backyard shed or outbuilding',
-        'POOL': 'a photo of a residential swimming pool',
-        'FENCE': 'a photo of a residential fence or boundary wall',
-        'LAND': 'a photo of undeveloped land or an empty lot',
-        'VIEW': 'a scenic landscape or mountain view photo',
-        'BUILDING PROGRESS': 'a photo of a house or structure under construction',
-        'DAMAGE': 'a photo showing property damage, deterioration, or disrepair',
+    CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+
+    VALID_LABELS = {
+        'FRONT OF HOUSE', 'BACK OF HOUSE', 'CORNER',
+        'GARAGE', 'SHED', 'POOL', 'LAND', 'VIEW',
+        'BUILDING PROGRESS', 'DAMAGE', 'OTHER',
     }
+
+    # CLIP fallback — used only when Claude API is unavailable
+    _CLIP_PROMPTS = {
+        'FRONT OF HOUSE': 'the front facade of a residential property',
+        'BACK OF HOUSE': 'the back of a residential property',
+        'CORNER': 'a corner angle view of a residential house exterior',
+        'GARAGE': 'a residential garage or carport',
+        'SHED': 'a backyard shed or outbuilding',
+        'POOL': 'a residential swimming pool',
+        'LAND': 'undeveloped land or an empty lot',
+        'VIEW': 'a scenic landscape or mountain view',
+        'BUILDING PROGRESS': 'a house or structure under construction',
+        'DAMAGE': 'property damage or deterioration',
+    }
+    _CLIP_THRESHOLD = 0.65
 
     def __init__(self, clip_model=None, clip_processor=None):
         """Accepts pre-loaded CLIP model to avoid loading it twice."""
@@ -505,53 +517,149 @@ class AppraisalClassifier:
         else:
             self.clip_model, self.clip_processor = load_clip_model()
 
-        self._labels = list(self.SCENE_PROMPTS.keys())
-        self._prompts = list(self.SCENE_PROMPTS.values())
+        self._clip_labels = list(self._CLIP_PROMPTS.keys())
+        self._clip_prompt_texts = list(self._CLIP_PROMPTS.values())
+        self._claude_client = None
+        self._setup_claude()
 
-    def classify_image(self, image_path: str) -> str:
-        """
-        Classify an exterior property photo.
+    def _setup_claude(self):
+        import os
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if api_key:
+            try:
+                import anthropic
+                self._claude_client = anthropic.Anthropic(api_key=api_key)
+                logger.info("Claude Vision API ready for appraiser classification")
+            except ImportError:
+                logger.warning("anthropic package not installed — falling back to CLIP")
+        else:
+            logger.warning(
+                "ANTHROPIC_API_KEY not set — appraiser classifier will use CLIP fallback. "
+                "Set the environment variable for best results."
+            )
 
-        Returns:
-            Base label (e.g. 'FRONT OF HOUSE', 'CORNER', 'LAND', 'OTHER').
-            Sequential numbering is handled by the processor.
-        """
+    def _classify_with_claude(self, image_path: str, compass_cardinal: Optional[str]) -> str:
+        """Send image to Claude Vision with compass context and get a label back."""
+        import base64
+        import anthropic
+
+        direction_context = (
+            f"The camera was pointing toward the {compass_cardinal} side of the property, "
+            f"so the photographer was standing on the {compass_cardinal} side looking at it. "
+        ) if compass_cardinal else ""
+
+        prompt = (
+            f"You are classifying a property photo for a county assessor's office. "
+            f"{direction_context}"
+            f"Classify this photo as exactly one of these labels:\n\n"
+            f"FRONT OF HOUSE\nBACK OF HOUSE\nCORNER\nGARAGE\nSHED\nPOOL\n"
+            f"LAND\nVIEW\nBUILDING PROGRESS\nDAMAGE\nOTHER\n\n"
+            f"Reply with ONLY the label, nothing else."
+        )
+
+        with open(image_path, 'rb') as f:
+            image_data = base64.standard_b64encode(f.read()).decode('utf-8')
+
+        # Detect media type
+        suffix = Path(image_path).suffix.lower()
+        media_type = 'image/jpeg' if suffix in ('.jpg', '.jpeg') else 'image/png'
+
+        response = self._claude_client.messages.create(
+            model=self.CLAUDE_MODEL,
+            max_tokens=20,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": image_data,
+                        },
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }],
+        )
+
+        raw = response.content[0].text.strip().upper()
+        label = raw if raw in self.VALID_LABELS else 'OTHER'
+        logger.info(
+            f"Claude Vision: {label} "
+            f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'})"
+        )
+        return label
+
+    def _classify_with_clip(self, image_path: str) -> str:
+        """CLIP fallback classification."""
         if not self.clip_model or not self.clip_processor:
             return 'OTHER'
-
         try:
             img = Image.open(image_path)
             if img.mode != 'RGB':
                 img = img.convert('RGB')
-
             inputs = self.clip_processor(
-                text=self._prompts,
+                text=self._clip_prompt_texts,
                 images=img,
                 return_tensors='pt',
-                padding=True
+                padding=True,
             )
-
             with torch.no_grad():
                 outputs = self.clip_model(**inputs)
-
             probs = outputs.logits_per_image.softmax(dim=1)
             top_idx = int(torch.argmax(probs, dim=1).item())
             top_confidence = float(probs[0][top_idx].item())
-            top_label = self._labels[top_idx]
-
-            if top_confidence >= self.CONFIDENCE_THRESHOLD:
-                logger.info(f"Appraiser: {top_label} (confidence: {top_confidence:.3f})")
+            top_label = self._clip_labels[top_idx]
+            if top_confidence >= self._CLIP_THRESHOLD:
+                logger.info(f"CLIP fallback: {top_label} ({top_confidence:.3f})")
                 return top_label
-
-            logger.info(
-                f"Appraiser: OTHER (top was {top_label} at {top_confidence:.3f}, below threshold)"
-            )
+            logger.info(f"CLIP fallback: OTHER (best was {top_label} at {top_confidence:.3f})")
+            return 'OTHER'
+        except Exception as e:
+            logger.error(f"CLIP fallback error for {image_path}: {e}")
             return 'OTHER'
 
+    def classify_image(self, image_path: str, compass_cardinal: Optional[str] = None) -> str:
+        """
+        Classify an exterior property photo.
+
+        Uses Claude Vision API when available (with compass direction for accuracy),
+        falls back to CLIP otherwise.
+
+        Args:
+            image_path: Path to the image file.
+            compass_cardinal: Cardinal direction the photographer was standing
+                              (e.g. 'NE', 'SW'). Improves front/back accuracy.
+
+        Returns:
+            Label string (e.g. 'FRONT OF HOUSE', 'CORNER', 'GARAGE', 'OTHER').
+            The caller combines this with compass_cardinal for the filename.
+        """
+        try:
+            if self._claude_client:
+                return self._classify_with_claude(image_path, compass_cardinal)
+            return self._classify_with_clip(image_path)
         except Exception as e:
             logger.error(f"AppraisalClassifier error for {image_path}: {e}")
             return 'OTHER'
 
-    def classify_images(self, image_paths: List[str]) -> List[Tuple[str, str]]:
-        """Classify multiple images. Returns list of (path, label) tuples."""
-        return [(path, self.classify_image(path)) for path in image_paths]
+    def classify_images(
+        self, image_paths: List[str], compass_cardinals: Optional[List[Optional[str]]] = None
+    ) -> List[Tuple[str, str]]:
+        """
+        Classify multiple images.
+
+        Args:
+            image_paths: List of image file paths.
+            compass_cardinals: Optional list of cardinal directions (one per image).
+
+        Returns:
+            List of (file_path, label) tuples.
+        """
+        if compass_cardinals is None:
+            compass_cardinals = [None] * len(image_paths)
+        return [
+            (path, self.classify_image(path, cardinal))
+            for path, cardinal in zip(image_paths, compass_cardinals)
+        ]

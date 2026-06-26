@@ -6,7 +6,7 @@ from typing import Dict, List
 
 from image_validator import validate_image_file
 from classifier import AppraisalClassifier
-from gps_resolver import GPSResolver, extract_date_from_exif
+from gps_resolver import GPSResolver, extract_date_from_exif, extract_compass_direction
 from file_utils import (
     generate_appraiser_filename,
     generate_unresolved_filename,
@@ -80,8 +80,9 @@ def process_folder_appraiser(
     converted_count = 0
 
     for original_path in raw_image_files:
-        # Read EXIF from original
+        # Read EXIF from original (GPS, compass, date — before conversion strips metadata)
         date_str = extract_date_from_exif(str(original_path))
+        compass = extract_compass_direction(str(original_path))
         account_no, coords, failure_reason = gps_resolver.resolve(str(original_path))
 
         # Convert non-JPEG to JPEG if needed
@@ -104,6 +105,7 @@ def process_folder_appraiser(
             'account_no': account_no,
             'failure_reason': failure_reason,
             'date_str': date_str,
+            'compass': compass,
         })
 
     if converted_count:
@@ -132,31 +134,45 @@ def process_folder_appraiser(
     if resolved_records:
         logger.info(f"Classifying {len(resolved_records)} resolved images...")
         image_paths = [str(r['working_path']) for r in resolved_records]
-        classifications = classifier.classify_images(image_paths)
+        compass_cardinals = [r['compass'] for r in resolved_records]
+        classifications = classifier.classify_images(image_paths, compass_cardinals)
 
-        # Map path → (record, label)
+        # Map path → label
         path_to_label = {path: label for path, label in classifications}
 
-        # Group by (account_no, label) for sequential numbering
+        # Group by (account_no, full_label) where full_label includes compass direction.
+        # This means NE CORNER and SW CORNER are numbered independently.
         groups: Dict[tuple, List[Dict]] = defaultdict(list)
         for rec in resolved_records:
             label = path_to_label.get(str(rec['working_path']), 'OTHER')
-            groups[(rec['account_no'], label)].append(rec)
+            cardinal = rec['compass']
+            full_label = f"{cardinal} {label}" if cardinal else label
+            groups[(rec['account_no'], full_label)].append(rec)
 
         output.mkdir(parents=True, exist_ok=True)
 
-        for (account_no, label), group_records in groups.items():
+        for (account_no, full_label), group_records in groups.items():
             group_records.sort(key=lambda r: r['original_name'])
+            # Parse back the cardinal and base label for filename generation
+            parts = full_label.split(' ', 1) if ' ' in full_label else [None, full_label]
+            if parts[0] in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'):
+                cardinal, base_label = parts[0], parts[1]
+            else:
+                cardinal, base_label = None, full_label
+
             for index, rec in enumerate(group_records, start=1):
-                filename = generate_appraiser_filename(account_no, label, index, rec['date_str'])
+                filename = generate_appraiser_filename(
+                    account_no, base_label, index, rec['date_str'], cardinal=cardinal
+                )
                 copied = copy_and_rename_image(rec['working_path'], output, filename)
                 if copied:
                     results.append({
                         'original_file': rec['original_name'],
                         'new_filename': filename,
-                        'classification': label,
+                        'classification': full_label,
                         'account_no': account_no,
                         'date': rec['date_str'],
+                        'compass': rec['compass'],
                         'saved_path': str(copied),
                     })
                     logger.info(f"Processed: {rec['original_name']} → {filename}")

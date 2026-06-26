@@ -197,6 +197,59 @@ def extract_gps_from_exif(image_path: str) -> Optional[Tuple[float, float]]:
         return None
 
 
+def _degrees_to_cardinal(degrees: float) -> str:
+    """Convert compass degrees to 8-point cardinal direction."""
+    cardinals = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+    index = round(degrees / 45) % 8
+    return cardinals[index]
+
+
+def extract_compass_direction(image_path: str) -> Optional[str]:
+    """
+    Extract the cardinal direction of the photographer's position from EXIF.
+
+    GPSImgDirection is which way the camera lens was pointing.
+    The photographer was standing on the opposite side of the building,
+    so we add 180° to get the side of the property being photographed.
+
+    Returns:
+        Cardinal string (e.g. 'NE', 'SW') or None if not available.
+    """
+    try:
+        img = Image.open(image_path)
+        exif_data = img._getexif()
+        if not exif_data:
+            return None
+
+        gps_info_raw = exif_data.get(34853)
+        if not gps_info_raw:
+            return None
+
+        gps_info = {GPSTAGS.get(k, k): v for k, v in gps_info_raw.items()}
+        camera_direction = gps_info.get('GPSImgDirection')
+
+        if camera_direction is None:
+            return None
+
+        # Convert IFDRational to float if needed
+        if hasattr(camera_direction, 'numerator'):
+            camera_direction = camera_direction.numerator / camera_direction.denominator
+
+        camera_direction = float(camera_direction)
+        photographer_side = (camera_direction + 180.0) % 360.0
+        cardinal = _degrees_to_cardinal(photographer_side)
+
+        logger.debug(
+            f"Compass: camera→{camera_direction:.1f}°, "
+            f"photographer side→{photographer_side:.1f}° ({cardinal})"
+        )
+        return cardinal
+
+    except Exception as e:
+        logger.debug(f"Error extracting compass from {Path(image_path).name}: {e}")
+        return None
+
+
 def extract_date_from_exif(image_path: str) -> str:
     """
     Extract capture date from EXIF metadata.

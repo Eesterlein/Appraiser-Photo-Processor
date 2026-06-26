@@ -51,14 +51,23 @@ def generate_filename(account_no: str, classification: str, index: int) -> str:
     return filename
 
 
-def generate_appraiser_filename(account_no: str, label: str, index: int, date_str: str) -> str:
+def generate_appraiser_filename(
+    account_no: str,
+    label: str,
+    index: int,
+    date_str: str,
+    cardinal: Optional[str] = None,
+) -> str:
     """
     Generate filename for appraiser mode.
 
-    Format: {ACCOUNT_NO} - {LABEL} {INDEX} - {DATE}.JPG
+    With compass direction:  {ACCOUNT_NO} - {CARDINAL} {LABEL} {INDEX} - {DATE}.JPG
+    Without compass direction: {ACCOUNT_NO} - {LABEL} {INDEX} - {DATE}.JPG
     """
     account_no = str(account_no).upper().strip()
     label = label.upper().strip()
+    if cardinal:
+        return f"{account_no} - {cardinal} {label} {index} - {date_str}.JPG"
     return f"{account_no} - {label} {index} - {date_str}.JPG"
 
 
