@@ -1,129 +1,90 @@
-# MLS Photo Processor
+# Appraiser Photo Processor
 
-A desktop application for processing MLS (Multiple Listing Service) property photos. The application automatically extracts parcel numbers from folder names, matches them to account numbers via CSV lookup, and classifies images by room type using a three-layer classification system (rules-based with ML fallback).
+A desktop application for county assessors and title administrators to automatically classify and rename property photos. Select your role, point the app at a folder of photos, and it handles the rest.
 
-## Features
+## Roles
 
-- **Desktop GUI**: User-friendly tkinter-based interface for folder selection and processing
-- **Parcel Number Extraction**: Automatically extracts parcel numbers from folder names
-- **Account Number Matching**: Matches parcel numbers to account numbers using CSV lookup
-- **Image Classification**: Classifies images into 10 room categories:
-  - KITCHEN
-  - LIVING ROOM
-  - BEDROOM
-  - OFFICE
-  - DINING ROOM
-  - LAUNDRY ROOM
-  - DECK
-  - EXTERIOR
-  - BATHROOM
-  - OTHER
-- **Automatic File Renaming**: Renames images according to naming convention: `{AccountNumber}_{RoomType}_{Index}.jpg`
-- **Image Format Support**: Handles JPEG, PNG, GIF, BMP, TIFF, and WebP formats (converts non-JPEG to JPEG)
-- **PDF Handling**: Automatically renames PDF files with account numbers
+### Title Administrator
+- Extracts parcel number from the folder name
+- Matches parcel number to account number via CSV lookup
+- Classifies interior room photos (KITCHEN, BEDROOM, BATHROOM, etc.) using a CLIP-based ML classifier
+- Renames files: `ACCOUNTNO - MLS - ROOMTYPE X.JPG`
+
+### Appraiser
+- Reads GPS coordinates from each photo's EXIF data
+- Matches GPS to the nearest parcel using a local address shapefile (no internet required)
+- Reads compass direction (GPSImgDirection) to determine which side of the building was photographed
+- Classifies photos using Claude Vision AI — handles both interior and exterior shots in the same folder
+- Interior: `ACCOUNTNO - KITCHEN 1 - YYYYMMDD.JPG`
+- Exterior: `ACCOUNTNO - NE FRONT OF BUILDING 1 - YYYYMMDD.JPG`
+- Photos with no GPS go to `processed/unresolved/`
+
+## Appraiser Labels
+
+**Exterior:** FRONT OF BUILDING, BACK OF BUILDING, CORNER OF BUILDING, CORNER OF GARAGE, CORNER OF SHED, GARAGE, SHED, WINDOW, LAND, VIEW, DECK, BUILDING PROGRESS, DAMAGE, OTHER
+
+**Interior:** KITCHEN, LIVING ROOM, BEDROOM, BATHROOM, DINING ROOM, LAUNDRY ROOM, OFFICE
 
 ## Requirements
 
-- Python 3.8+
-- See `backend/requirements.txt` for full dependency list
+- Python 3.11+
+- An Anthropic API key (for Appraiser mode — set as `ANTHROPIC_API_KEY` environment variable)
+- Address shapefile (`Address.dbf/.prj/.shp/.shx`) placed in `backend/data/`
+- Parcel CSV (`Accounts_and_Parcel_Numbers.csv`) — bundled or placed in `~/Downloads/`
+
+See `backend/requirements.txt` for Python dependencies.
 
 ## Installation
 
-1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/MLS_Photo_Processor.git
-cd MLS_Photo_Processor
-```
-
-2. Create a virtual environment:
-```bash
-python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
+git clone https://github.com/Eesterlein/Appraiser-Photo-Processor.git
+cd Appraiser-Photo-Processor
 cd backend
 pip install -r requirements.txt
 ```
 
-## Usage
+## Running the App
 
-1. Ensure you have a CSV file with parcel-to-account number mappings. The application looks for CSV files in this order:
-   - `~/Downloads/Accounts and Parcel Numbers - Sheet1.csv`
-   - `~/Documents/MLS_Photo_Processor/Accounts_and_Parcel_Numbers.csv`
-   - `backend/data/Accounts_and_Parcel_Numbers.csv` (bundled)
-
-2. Run the application:
 ```bash
 cd backend
-python app.py
+ANTHROPIC_API_KEY=your_key_here python app.py
 ```
 
-3. In the GUI:
-   - Click "Select Folder" to choose a folder containing MLS photos
-   - The folder name should contain a parcel number (e.g., "12345-678-90" or "Parcel_12345")
-   - Click "Process Images" to start processing
-   - Processed images will be saved to a `processed` subdirectory within the selected folder
-
-## How It Works
-
-1. **Parcel Extraction**: Extracts parcel number from folder name using pattern matching
-2. **CSV Lookup**: Matches parcel number to account number using the CSV mapping file
-3. **Image Discovery**: Scans folder for image files (JPEG, PNG, GIF, BMP, TIFF, WebP)
-4. **Image Validation**: Validates that files are valid image formats
-5. **Format Conversion**: Converts non-JPEG images to JPEG format
-6. **Classification**: Applies three-layer classification:
-   - **Layer 1**: Hard rules (e.g., bed detected → BEDROOM)
-   - **Layer 2**: Heuristic rules (e.g., sink + refrigerator → KITCHEN)
-   - **Layer 3**: ML fallback using CLIP model (if rules don't match)
-7. **File Renaming**: Renames files as `{AccountNumber}_{RoomType}_{Index}.jpg`
-8. **Output**: Copies processed images to `processed` subdirectory
+On Windows, set `ANTHROPIC_API_KEY` as a system environment variable so you don't need to pass it each time.
 
 ## Project Structure
 
 ```
-MLS_Photo_Processor/
+Appraiser-Photo-Processor/
 ├── backend/
-│   ├── app.py              # Main application entry point
-│   ├── gui.py              # Desktop GUI implementation
-│   ├── processor.py       # Main processing workflow
-│   ├── matcher.py          # CSV loading and parcel matching
-│   ├── classifier.py       # Three-layer image classification
-│   ├── folder_parser.py    # Parcel number extraction
-│   ├── image_validator.py  # Image validation utilities
-│   ├── file_utils.py       # File operations and renaming
-│   ├── data/
-│   │   └── Accounts_and_Parcel_Numbers.csv  # Bundled CSV template
-│   └── requirements.txt    # Python dependencies
-├── build.py                # PyInstaller build script
-├── build.spec              # PyInstaller configuration
-├── TECHNICAL_OVERVIEW.md    # Detailed technical documentation
-└── README.md               # This file
+│   ├── app.py                  # Entry point — loads models and launches GUI
+│   ├── gui.py                  # tkinter GUI with role selector
+│   ├── classifier.py           # CLIP classifier (Title Admin) + Claude Vision classifier (Appraiser)
+│   ├── appraiser_processor.py  # Appraiser processing pipeline
+│   ├── processor.py            # Title Admin processing pipeline
+│   ├── gps_resolver.py         # GPS EXIF extraction + shapefile parcel matching
+│   ├── matcher.py              # CSV parcel-to-account lookup
+│   ├── file_utils.py           # File naming and copying utilities
+│   ├── image_validator.py      # Image validation
+│   ├── folder_parser.py        # Parcel number extraction from folder names
+│   └── data/
+│       ├── Address.dbf/.prj/.shp/.shx   # Address shapefile (not committed — place manually)
+│       └── Accounts_and_Parcel_Numbers.csv
+├── TECHNICAL_OVERVIEW.md
+└── README.md
 ```
 
-## Building Executable
-
-To build a standalone executable using PyInstaller:
+## Building a Windows Executable
 
 ```bash
+pip install pyinstaller
 python build.py
 ```
 
-The executable will be created in the `dist/` directory.
+The `.exe` will be in `dist/`. Set `ANTHROPIC_API_KEY` as a Windows system environment variable on the deployment machine.
 
-## Classification System
+## Privacy & Security
 
-The application uses a rules-first approach with ML fallback:
-
-- **Priority**: Hard rules → Heuristic rules → ML classification → OTHER
-- **Object Detection**: Uses CLIP model (`openai/clip-vit-base-patch32`) for detecting objects like "bed", "refrigerator", "toilet", etc.
-- **Confidence Thresholds**: 
-  - Object detection: 0.6 minimum confidence
-  - ML classification: 0.65 minimum confidence to override OTHER
-- **Conservative Defaults**: Images that don't match rules or have low ML confidence are classified as "OTHER"
-
-See `TECHNICAL_OVERVIEW.md` for detailed information about the classification system.
-
-
-
+- The address shapefile and GPS matching run entirely locally — no property location data leaves the machine
+- Photos are only sent to the Anthropic API (Claude Vision) for classification in Appraiser mode
+- The API key is never stored in code or config files — always read from the environment variable

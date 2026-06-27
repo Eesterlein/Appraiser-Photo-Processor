@@ -1,195 +1,94 @@
-# Technical Architecture Overview
+# Technical Overview
 
-##  High-Level Architecture
+## Architecture
 
-### Application Type
-This is a local desktop application built with Python and tkinter. The application runs entirely on the user's machine with no web server, cloud services, or internet dependency. All processing occurs locally using files already present on the user's filesystem.
+Single-process Python desktop app (tkinter). All processing runs locally on the user's machine. The only external call is to the Anthropic API for Claude Vision classification in Appraiser mode.
 
-### Execution Model
-The application follows a single-process, event-driven architecture:
+### Startup sequence (`app.py`)
+1. Load parcel CSV → `ParcelMatcher`
+2. Load CLIP model once → shared between both classifiers
+3. Initialize `ImageClassifier` (Title Admin) and `AppraisalClassifier` (Appraiser) with shared CLIP model
+4. Load address shapefile → `GPSResolver`
+5. Launch tkinter GUI
 
-1. **Initialization**: On startup, the application loads two core components:
-   - `ParcelMatcher`: Loads CSV mapping data from disk (Downloads folder, Documents override, or bundled CSV)
-   - `ImageClassifier`: Loads the CLIP vision model for object detection (model files cached locally after first download)
+---
 
-2. **GUI Main Loop**: A tkinter-based desktop window provides the user interface. The GUI runs on the main thread and handles user interactions.
+## Title Administrator Mode
 
-3. **Processing Flow**: When the user selects a folder and triggers processing:
-   - Folder selection → Extract parcel number from folder name
-   - CSV lookup → Match parcel number to account number
-   - File scanning → Discover image files in the selected folder
-   - Image validation → Verify files are valid JPEG/JPG images
-   - Classification → Apply three-layer classification system to each image
-   - File operations → Rename and copy processed images to output subdirectory
+**Input:** Folder whose name contains a parcel number (e.g. `370135300045 - Smith John`)
 
-4. **Threading**: Image processing runs in a separate daemon thread to prevent GUI freezing. The GUI remains responsive during processing.
+**Pipeline (`processor.py`):**
+1. Extract parcel number from folder name via regex (`folder_parser.py`)
+2. Match parcel → account number via CSV (`matcher.py`)
+3. Validate and convert non-JPEG images to JPEG
+4. Classify each image with CLIP (`ImageClassifier`)
+5. Rename: `ACCOUNTNO - MLS - ROOMTYPE X.JPG`
 
-5. **Output**: Processed images are saved to a `processed` subdirectory within the selected folder. Original files remain untouched.
+**Classifier (`ImageClassifier`):**
+- CLIP model `openai/clip-vit-base-patch32` via Hugging Face
+- Labels: KITCHEN, LIVING ROOM, BEDROOM, BATHROOM, DINING ROOM, LAUNDRY ROOM, OFFICE, DECK, EXTERIOR, OTHER
+- Confidence threshold: 0.65 — below threshold → OTHER
 
-### Key Architectural Decisions
-- **No network calls**: All operations are local file I/O. The only potential network activity is the initial CLIP model download (via Hugging Face Hub), which occurs once and caches locally.
-- **Single executable target**: The application is designed to be packaged with PyInstaller into a standalone Windows executable (.exe) for deployment.
-- **Stateless processing**: Each folder processing operation is independent. No state is maintained between runs.
+---
 
-## Key Python Packages & Libraries Used
+## Appraiser Mode
 
-### Core Dependencies
+**Input:** Any folder of photos (mixed interior/exterior OK, mixed properties OK)
 
-**pandas** (`pandas`)
-- **Usage**: CSV file loading and data manipulation for parcel-to-account number mapping
-- **Why chosen**: Standard library for structured data handling. Provides robust CSV parsing with automatic type inference and data cleaning capabilities. Used in `matcher.py` to load and query the parcel mapping CSV.
+**Pipeline (`appraiser_processor.py`):**
+1. For each image, read EXIF **before any conversion** (GPS, compass, date)
+2. Convert non-JPEG to JPEG if needed
+3. Resolve GPS → account number via shapefile nearest-neighbor (`GPSResolver`)
+4. Classify with Claude Vision (`AppraisalClassifier`)
+5. Group by `(account_no, full_label)` — interior labels skip compass prefix
+6. Rename with sequential index within each group
+7. Unresolved (no GPS match) → `processed/unresolved/`
 
-**Pillow** (`Pillow`)
-- **Usage**: Image file loading, format conversion, and validation
-- **Why chosen**: De facto standard Python imaging library. Required for opening JPEG files, converting non-JPEG formats to JPEG, and validating image integrity. Used throughout `classifier.py`, `image_validator.py`, and `file_utils.py`.
+### GPS Resolution (`gps_resolver.py`)
+- Reads EXIF tag 34853 (GPSInfo) → decimal degrees
+- Loads `Address.dbf` — 16,023 address points with Latitude, Longitude, ACCOUNTNO
+- Numpy nearest-neighbor search; 200m distance threshold
+- Pure Python DBF reader (no external shapefile library needed)
 
-**transformers** (`transformers`)
-- **Usage**: Loading and using the CLIP vision model for object detection
-- **Why chosen**: Hugging Face Transformers provides standardized access to pre-trained vision models. Used specifically to load `openai/clip-vit-base-patch32` for object detection queries. The model is downloaded once and cached locally via Hugging Face Hub.
+### Compass Direction
+- Reads EXIF GPSImgDirection (tag 17) — which way the camera lens was pointing
+- Photographer side = `(camera_direction + 180°) % 360°`
+- Mapped to 8-point cardinal: N, NE, E, SE, S, SW, W, NW
+- Added as prefix to exterior labels only: `NE FRONT OF BUILDING`
 
-**torch** (`torch>=2.6.0`)
-- **Usage**: Deep learning backend for CLIP model inference
-- **Why chosen**: PyTorch is the required runtime for Hugging Face Transformers models. Used for tensor operations during CLIP inference in `classifier.py`.
+### Claude Vision Classifier (`AppraisalClassifier`)
+- Model: `claude-haiku-4-5-20251001`
+- Images resized to max 1024px wide in memory before sending (cost optimization)
+- Prompt includes compass context so Claude can reason about which facade is visible
+- Handles both interior and exterior photos in one call
+- Falls back to CLIP if `ANTHROPIC_API_KEY` is not set
 
-**torchvision** (`torchvision`)
-- **Usage**: Image preprocessing utilities for PyTorch
-- **Why chosen**: Companion library to PyTorch that provides image transformation utilities. Used indirectly by transformers for image preprocessing.
+**Exterior labels:** FRONT OF BUILDING, BACK OF BUILDING, CORNER OF BUILDING, CORNER OF GARAGE, CORNER OF SHED, GARAGE, SHED, WINDOW, LAND, VIEW, DECK, BUILDING PROGRESS, DAMAGE, OTHER
 
-**numpy** (`numpy`)
-- **Usage**: Array operations for image analysis and outdoor scene detection heuristics
-- **Why chosen**: Standard numerical computing library. Used in `classifier.py` for pixel-level analysis (sky detection, grass detection, brightness variance calculations) in the `_is_outdoor()` method.
+**Interior labels:** KITCHEN, LIVING ROOM, BEDROOM, BATHROOM, DINING ROOM, LAUNDRY ROOM, OFFICE
 
-**tkinter** (Python standard library)
-- **Usage**: Desktop GUI framework for folder selection, button controls, and status display
-- **Why chosen**: Built into Python, no external dependencies. Provides native desktop windowing on Windows, macOS, and Linux. Used in `gui.py` for the entire user interface.
+### Filename formats
+```
+Exterior:  ACCOUNTNO - NE FRONT OF BUILDING 1 - 20240618.JPG
+Interior:  ACCOUNTNO - KITCHEN 1 - 20240618.JPG
+Unresolved: UNRESOLVED - IMG_1234 - 20240618.JPG
+```
 
-**pyinstaller** (`pyinstaller`)
-- **Usage**: Packaging Python application into standalone executable
-- **Why chosen**: Standard tool for creating Windows executables from Python applications. Allows deployment without requiring Python installation on target machines.
+---
 
-### Supporting Dependencies
+## CSV / Shapefile Loading Priority
 
-**tqdm** (`tqdm`)
-- **Usage**: Progress bar display (if implemented in future iterations)
-- **Note**: Currently listed in requirements but not actively used in the current codebase.
+**Parcel CSV (Title Admin):**
+1. `~/Downloads/Account_and_Parcel_Numbers - Sheet1.csv`
+2. `~/Downloads/Accounts and Parcel Numbers - Sheet1.csv`
+3. `~/Documents/MLS_Photo_Processor/Accounts_and_Parcel_Numbers.csv`
+4. `backend/data/Accounts_and_Parcel_Numbers.csv` (bundled)
 
-**huggingface-hub** (`huggingface-hub`)
-- **Usage**: Model downloading and caching from Hugging Face
-- **Why chosen**: Handles automatic model download and local caching. Used by transformers when loading the CLIP model for the first time.
+**Address Shapefile (Appraiser):**
+- `backend/data/Address.dbf` (must be placed manually — not committed to repo)
 
-## Image Classification Approach
+---
 
-### Overall Strategy: Rules-First with ML Fallback
+## Windows Deployment
 
-The classification system uses a three-layer hierarchical approach where deterministic rules take absolute priority, and machine learning models serve only as a fallback signal. This design prioritizes predictability and stability over maximum AI accuracy.
-
-### Why Rules-First?
-
-The rules-first approach was chosen after experimentation with direct ML-based classification revealed instability issues:
-
-1. **Initial attempts** with CLIP-based room classification resulted in high misclassification rates (e.g., classifying most images as "BATHROOM").
-2. **Object detection with CLIP** proved more reliable than direct room classification, but still required careful threshold management.
-3. **Final design**: Use CLIP only for object detection (detecting specific items like "bed", "refrigerator", "toilet"), then apply deterministic rules to make the final room classification decision.
-
-### CLIP Usage: Object Detection Only
-
-The CLIP model (`openai/clip-vit-base-patch32`) is used exclusively for object detection, not for final room classification. The `_detect_objects()` method queries CLIP with a predefined list of object keywords (e.g., "bed", "refrigerator", "washing machine", "toilet") and returns confidence scores above a threshold (0.6).
-
-**Key constraint**: CLIP never directly chooses the room label. It only provides a dictionary of detected objects with confidence scores. The rule-based logic then interprets these detections to make the final classification.
-
-### Confidence Thresholds and Conservative Defaults
-
-- **Object detection threshold**: 0.6 (minimum confidence for an object to be considered "detected")
-- **Hugging Face classifier threshold**: 0.65 (Layer 3 fallback must exceed this to override OTHER)
-- **Default classification**: If no rules match and ML confidence is below threshold, the image is classified as "OTHER"
-
-**Design philosophy**: Mislabeling is considered worse than leaving an image as "OTHER". The system defaults to conservative classification rather than forcing a prediction.
-
-### CLIP and Complex Object Detection: Intentionally Avoided
-
-The codebase explicitly avoids using CLIP as a primary classifier. Historical attempts to use CLIP for direct room classification resulted in:
-- Over-aggressive classification (classifying everything as one room type)
-- Threshold sensitivity issues
-- Unpredictable behavior across different image types
-
-The current implementation uses CLIP only for simple object detection queries, and the rule-based logic handles all final decisions. This approach was chosen specifically to avoid the instability observed in earlier CLIP-based classification attempts.
-
-##  Room Classification Design
-
-### Final Allowed Room Categories
-
-The system uses a constrained set of 10 canonical labels (all uppercase):
-
-- `KITCHEN`
-- `LIVING ROOM`
-- `BEDROOM`
-- `OFFICE`
-- `DINING ROOM`
-- `LAUNDRY ROOM`
-- `DECK`
-- `EXTERIOR`
-- `BATHROOM`
-- `OTHER`
-
-### Why a Small Label Set?
-
-The label set was intentionally kept small to:
-1. **Reduce ambiguity**: Fewer categories mean clearer distinctions between room types
-2. **Improve rule coverage**: A smaller set allows more comprehensive rule definitions
-3. **Increase predictability**: Users can expect consistent behavior across similar images
-4. **Simplify maintenance**: Fewer labels mean fewer edge cases to handle
-
-Labels like "GARAGE", "STAIRWAY", and "OUTSIDEAREA" were removed from earlier iterations to focus on the most common and clearly distinguishable room types.
-
-### Rule Priority and Fallback Logic
-
-Classification proceeds through three layers in strict priority order:
-
-**Layer 1: Hard Rules** (Override all other logic)
-- Hard rules check for specific object combinations that definitively indicate a room type
-- Examples:
-  - Toilet/bathtub/shower detected → BATHROOM
-  - Bed detected → BEDROOM
-  - Desk AND (chair OR computer) → OFFICE
-  - Both washer AND dryer → LAUNDRY ROOM
-- If a hard rule matches, classification stops immediately. No further layers are evaluated.
-
-**Layer 2: Heuristic Rules** (Applied only if no hard rules match)
-- Heuristic rules use combinations of objects with exclusion logic
-- Examples:
-  - Sink + refrigerator OR stove + cabinets → KITCHEN
-  - Table present, no bed, no appliances → DINING ROOM
-  - Couch/sofa AND (TV OR fireplace) → LIVING ROOM
-- These rules are more permissive but still deterministic.
-
-**Layer 3: Hugging Face Classifier** (Fallback only)
-- Only invoked if no hard rules and no heuristic rules match
-- Uses CLIP zero-shot classification with room type labels
-- Must exceed confidence threshold (0.65) to override OTHER
-- If confidence is below threshold, defaults to OTHER
-
-**Final Fallback**: If all three layers fail to produce a classification, the image is assigned "OTHER".
-
-### Why OTHER is Valid and Expected
-
-The classification system treats "OTHER" as a legitimate and expected classification, not a failure state. This design choice reflects the philosophy that:
-
-1. **Not all images fit clean categories**: Transitional spaces (hallways, mudrooms, stairs), ambiguous scenes, or unusual layouts may not match any room-specific rules.
-
-2. **Stability over coverage**: It is preferable to classify uncertain images as "OTHER" rather than force them into an incorrect room category.
-
-3. **User review expected**: Images classified as "OTHER" can be manually reviewed and renamed if needed, which is preferable to incorrect automatic classification.
-
-4. **Reduces false positives**: By defaulting to OTHER when confidence is low, the system avoids misclassifying ambiguous images.
-
-### Predictability and Stability Over Maximum AI Accuracy
-
-The entire classification system prioritizes deterministic, predictable behavior over maximizing the number of images classified into specific room types. Key design decisions reflect this:
-
-- **Rules override ML**: Even if a machine learning model suggests a classification, rules take precedence
-- **High confidence thresholds**: ML fallback requires high confidence (0.65) before overriding OTHER
-- **Conservative defaults**: When in doubt, classify as OTHER
-- **Deterministic rules**: Hard rules and heuristic rules produce the same result for the same input, ensuring consistency
-
-This approach ensures that the classification system behaves predictably across different image sets and reduces the risk of unexpected misclassifications that could require manual correction.
-
+Built with PyInstaller into a single `.exe`. The CLIP model and shapefile are bundled. The Anthropic API key must be set as a Windows system environment variable (`ANTHROPIC_API_KEY`) on the deployment machine — it is never stored in code or config files.
