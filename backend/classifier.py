@@ -489,23 +489,27 @@ class AppraisalClassifier:
     CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
     VALID_LABELS = {
-        'FRONT OF HOUSE', 'BACK OF HOUSE', 'CORNER',
-        'GARAGE', 'SHED', 'POOL', 'LAND', 'VIEW',
-        'BUILDING PROGRESS', 'DAMAGE', 'OTHER',
+        'FRONT OF BUILDING', 'BACK OF BUILDING',
+        'CORNER OF BUILDING', 'CORNER OF GARAGE', 'CORNER OF SHED',
+        'GARAGE', 'SHED', 'WINDOW', 'LAND', 'VIEW',
+        'DECK', 'BUILDING PROGRESS', 'DAMAGE', 'OTHER',
     }
 
     # CLIP fallback — used only when Claude API is unavailable
     _CLIP_PROMPTS = {
-        'FRONT OF HOUSE': 'the front facade of a residential property',
-        'BACK OF HOUSE': 'the back of a residential property',
-        'CORNER': 'a corner angle view of a residential house exterior',
-        'GARAGE': 'a residential garage or carport',
-        'SHED': 'a backyard shed or outbuilding',
-        'POOL': 'a residential swimming pool',
-        'LAND': 'undeveloped land or an empty lot',
-        'VIEW': 'a scenic landscape or mountain view',
-        'BUILDING PROGRESS': 'a house or structure under construction',
-        'DAMAGE': 'property damage or deterioration',
+        'FRONT OF BUILDING': 'the front facade of a residential or commercial building',
+        'BACK OF BUILDING': 'the rear of a building or residential property',
+        'CORNER OF BUILDING': 'a diagonal corner view of a house or main building showing two walls meeting',
+        'CORNER OF GARAGE': 'a diagonal corner view of a garage showing two walls meeting',
+        'CORNER OF SHED': 'a diagonal corner view of a shed or outbuilding showing two walls meeting',
+        'GARAGE': 'a garage with a clearly visible garage door',
+        'SHED': 'a small wood or metal outbuilding or storage shed without a garage door',
+        'WINDOW': 'a close-up photo where windows are the primary subject',
+        'LAND': 'outdoor photo featuring trees, open sky, or mountains without buildings',
+        'VIEW': 'a scenic landscape or mountain range panorama',
+        'DECK': 'an outdoor deck, patio, or covered porch attached to a building',
+        'BUILDING PROGRESS': 'an active construction site or unfinished building with materials',
+        'DAMAGE': 'a close-up of property damage, deterioration, or disrepair',
     }
     _CLIP_THRESHOLD = 0.65
 
@@ -517,8 +521,8 @@ class AppraisalClassifier:
         else:
             self.clip_model, self.clip_processor = load_clip_model()
 
-        self._clip_labels = list(self._CLIP_PROMPTS.keys())
-        self._clip_prompt_texts = list(self._CLIP_PROMPTS.values())
+        self._clip_labels: List[str] = list(self._CLIP_PROMPTS.keys())
+        self._clip_prompt_texts: List[str] = list(self._CLIP_PROMPTS.values())
         self._claude_client = None
         self._setup_claude()
 
@@ -538,9 +542,34 @@ class AppraisalClassifier:
                 "Set the environment variable for best results."
             )
 
+    # Max pixel width sent to Claude — reduces token cost while preserving accuracy
+    _CLAUDE_MAX_WIDTH = 1024
+
+    def _prepare_image_for_claude(self, image_path: str) -> Tuple[str, str]:
+        """
+        Resize image to max width and return (base64_data, media_type).
+        Resizing is done in memory — original file is never modified.
+        """
+        import base64
+        from io import BytesIO
+
+        img = Image.open(image_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        if img.width > self._CLAUDE_MAX_WIDTH:
+            ratio = self._CLAUDE_MAX_WIDTH / img.width
+            new_size = (self._CLAUDE_MAX_WIDTH, int(img.height * ratio))
+            img = img.resize(new_size, Image.LANCZOS)
+            logger.debug(f"Resized to {new_size[0]}x{new_size[1]} for Claude API")
+
+        buffer = BytesIO()
+        img.save(buffer, format='JPEG', quality=85)
+        image_data = base64.standard_b64encode(buffer.getvalue()).decode('utf-8')
+        return image_data, 'image/jpeg'
+
     def _classify_with_claude(self, image_path: str, compass_cardinal: Optional[str]) -> str:
         """Send image to Claude Vision with compass context and get a label back."""
-        import base64
         import anthropic
 
         direction_context = (
@@ -549,20 +578,33 @@ class AppraisalClassifier:
         ) if compass_cardinal else ""
 
         prompt = (
-            f"You are classifying a property photo for a county assessor's office. "
+            f"You are classifying exterior property photos for a county assessor's office. "
             f"{direction_context}"
-            f"Classify this photo as exactly one of these labels:\n\n"
-            f"FRONT OF HOUSE\nBACK OF HOUSE\nCORNER\nGARAGE\nSHED\nPOOL\n"
-            f"LAND\nVIEW\nBUILDING PROGRESS\nDAMAGE\nOTHER\n\n"
+            f"Choose the single best label from this list:\n\n"
+            f"FRONT OF BUILDING — front facade of a house or building, main entrance side\n"
+            f"BACK OF BUILDING — rear of a house or building, back yard side\n"
+            f"CORNER OF BUILDING — diagonal view showing two walls of the main house/building meeting at an angle\n"
+            f"CORNER OF GARAGE — diagonal view showing two walls of a garage meeting at an angle\n"
+            f"CORNER OF SHED — diagonal view showing two walls of a shed or outbuilding meeting at an angle\n"
+            f"GARAGE — garage or carport where a garage door is clearly visible\n"
+            f"SHED — small wood or metal outbuilding or storage structure without a visible garage door\n"
+            f"WINDOW — photo where a window or windows are the primary subject (close-up detail shot)\n"
+            f"LAND — any outdoor photo featuring trees, open sky, mountains, or undeveloped land\n"
+            f"VIEW — scenic landscape, mountain range, or panoramic outdoor scene\n"
+            f"DECK — outdoor deck, patio, or covered porch\n"
+            f"BUILDING PROGRESS — active construction site, unfinished structure, or scattered building materials\n"
+            f"DAMAGE — close-up photo showing visible damage, deterioration, rot, or disrepair\n"
+            f"OTHER — only if the photo cannot be identified as any of the above\n\n"
+            f"Rules:\n"
+            f"- If a garage door is clearly visible → GARAGE\n"
+            f"- If you see two walls of a structure meeting at a corner angle → CORNER OF BUILDING, CORNER OF GARAGE, or CORNER OF SHED\n"
+            f"- If the main structure (house/building walls, roof, siding) fills the frame → FRONT OF BUILDING or BACK OF BUILDING\n"
+            f"- WINDOW only for close-up detail shots focused on windows, not general building shots with windows visible\n"
+            f"- LAND for any outdoor wide shot with trees, sky, or mountains as the main subject\n\n"
             f"Reply with ONLY the label, nothing else."
         )
 
-        with open(image_path, 'rb') as f:
-            image_data = base64.standard_b64encode(f.read()).decode('utf-8')
-
-        # Detect media type
-        suffix = Path(image_path).suffix.lower()
-        media_type = 'image/jpeg' if suffix in ('.jpg', '.jpeg') else 'image/png'
+        image_data, media_type = self._prepare_image_for_claude(image_path)
 
         response = self._claude_client.messages.create(
             model=self.CLAUDE_MODEL,
