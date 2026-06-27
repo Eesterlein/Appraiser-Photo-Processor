@@ -489,10 +489,22 @@ class AppraisalClassifier:
     CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
     VALID_LABELS = {
+        # Exterior labels
         'FRONT OF BUILDING', 'BACK OF BUILDING',
         'CORNER OF BUILDING', 'CORNER OF GARAGE', 'CORNER OF SHED',
         'GARAGE', 'SHED', 'WINDOW', 'LAND', 'VIEW',
-        'DECK', 'BUILDING PROGRESS', 'DAMAGE', 'OTHER',
+        'DECK', 'BUILDING PROGRESS', 'DAMAGE',
+        # Interior labels
+        'KITCHEN', 'LIVING ROOM', 'BEDROOM', 'BATHROOM',
+        'DINING ROOM', 'LAUNDRY ROOM', 'OFFICE',
+        # Fallback
+        'OTHER',
+    }
+
+    # Interior labels — compass direction is not added to these in filenames
+    INTERIOR_LABELS = {
+        'KITCHEN', 'LIVING ROOM', 'BEDROOM', 'BATHROOM',
+        'DINING ROOM', 'LAUNDRY ROOM', 'OFFICE',
     }
 
     # CLIP fallback — used only when Claude API is unavailable
@@ -510,6 +522,13 @@ class AppraisalClassifier:
         'DECK': 'an outdoor deck, patio, or covered porch attached to a building',
         'BUILDING PROGRESS': 'an active construction site or unfinished building with materials',
         'DAMAGE': 'a close-up of property damage, deterioration, or disrepair',
+        'KITCHEN': 'a residential kitchen interior with cabinets and appliances',
+        'LIVING ROOM': 'a residential living room or lounge interior',
+        'BEDROOM': 'a residential bedroom interior',
+        'BATHROOM': 'a residential bathroom interior with sink or toilet',
+        'DINING ROOM': 'a residential dining room interior',
+        'LAUNDRY ROOM': 'a residential laundry room with washer or dryer',
+        'OFFICE': 'a home office or study room interior',
     }
     _CLIP_THRESHOLD = 0.65
 
@@ -578,9 +597,19 @@ class AppraisalClassifier:
         ) if compass_cardinal else ""
 
         prompt = (
-            f"You are classifying exterior property photos for a county assessor's office. "
+            f"You are classifying property photos for a county assessor's office. "
+            f"Photos may be interior (inside the building) or exterior (outside). "
             f"{direction_context}"
             f"Choose the single best label from this list:\n\n"
+            f"INTERIOR LABELS (inside a building):\n"
+            f"KITCHEN — kitchen interior with cabinets, appliances, or countertops\n"
+            f"LIVING ROOM — living room or lounge interior\n"
+            f"BEDROOM — bedroom interior\n"
+            f"BATHROOM — bathroom interior with sink, toilet, or tub\n"
+            f"DINING ROOM — dining room interior\n"
+            f"LAUNDRY ROOM — laundry room with washer or dryer\n"
+            f"OFFICE — home office or study interior\n\n"
+            f"EXTERIOR LABELS (outside a building):\n"
             f"FRONT OF BUILDING — front facade of a house or building, main entrance side\n"
             f"BACK OF BUILDING — rear of a house or building, back yard side\n"
             f"CORNER OF BUILDING — diagonal view showing two walls of the main house/building meeting at an angle\n"
@@ -588,18 +617,18 @@ class AppraisalClassifier:
             f"CORNER OF SHED — diagonal view showing two walls of a shed or outbuilding meeting at an angle\n"
             f"GARAGE — garage or carport where a garage door is clearly visible\n"
             f"SHED — small wood or metal outbuilding or storage structure without a visible garage door\n"
-            f"WINDOW — photo where a window or windows are the primary subject (close-up detail shot)\n"
-            f"LAND — any outdoor photo featuring trees, open sky, mountains, or undeveloped land\n"
+            f"WINDOW — close-up detail shot where windows are the primary subject\n"
+            f"LAND — outdoor photo featuring trees, open sky, mountains, or undeveloped land\n"
             f"VIEW — scenic landscape, mountain range, or panoramic outdoor scene\n"
             f"DECK — outdoor deck, patio, or covered porch\n"
             f"BUILDING PROGRESS — active construction site, unfinished structure, or scattered building materials\n"
             f"DAMAGE — close-up photo showing visible damage, deterioration, rot, or disrepair\n"
             f"OTHER — only if the photo cannot be identified as any of the above\n\n"
             f"Rules:\n"
+            f"- If the photo is clearly taken inside a building → use an interior label\n"
             f"- If a garage door is clearly visible → GARAGE\n"
             f"- If you see two walls of a structure meeting at a corner angle → CORNER OF BUILDING, CORNER OF GARAGE, or CORNER OF SHED\n"
-            f"- If the main structure (house/building walls, roof, siding) fills the frame → FRONT OF BUILDING or BACK OF BUILDING\n"
-            f"- WINDOW only for close-up detail shots focused on windows, not general building shots with windows visible\n"
+            f"- WINDOW only for close-up detail shots focused on windows, not general building shots that happen to have windows\n"
             f"- LAND for any outdoor wide shot with trees, sky, or mountains as the main subject\n\n"
             f"Reply with ONLY the label, nothing else."
         )

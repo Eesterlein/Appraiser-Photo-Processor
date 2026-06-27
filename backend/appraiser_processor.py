@@ -140,20 +140,21 @@ def process_folder_appraiser(
         # Map path → label
         path_to_label = {path: label for path, label in classifications}
 
-        # Group by (account_no, full_label) where full_label includes compass direction.
-        # This means NE CORNER and SW CORNER are numbered independently.
+        # Group by (account_no, full_label) where full_label includes compass direction
+        # for exterior labels. Interior labels never get a compass prefix.
         groups: Dict[tuple, List[Dict]] = defaultdict(list)
         for rec in resolved_records:
             label = path_to_label.get(str(rec['working_path']), 'OTHER')
             cardinal = rec['compass']
-            full_label = f"{cardinal} {label}" if cardinal else label
+            is_interior = label in AppraisalClassifier.INTERIOR_LABELS
+            full_label = label if is_interior or not cardinal else f"{cardinal} {label}"
             groups[(rec['account_no'], full_label)].append(rec)
 
         output.mkdir(parents=True, exist_ok=True)
 
         for (account_no, full_label), group_records in groups.items():
             group_records.sort(key=lambda r: r['original_name'])
-            # Parse back the cardinal and base label for filename generation
+            # Parse cardinal prefix back out for filename generation
             parts = full_label.split(' ', 1) if ' ' in full_label else [None, full_label]
             if parts[0] in ('N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'):
                 cardinal, base_label = parts[0], parts[1]
