@@ -63,6 +63,9 @@ class ImageClassifier:
     # Confidence threshold for Hugging Face classifier (Layer 3)
     HF_CLASSIFIER_THRESHOLD = 0.65
 
+    _CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+    _CLAUDE_MAX_WIDTH = 1024
+
     def __init__(self, clip_model=None, clip_processor=None):
         """Initialize. Accepts pre-loaded CLIP model to avoid loading it twice."""
         if clip_model is not None and clip_processor is not None:
@@ -70,6 +73,73 @@ class ImageClassifier:
             self.clip_processor = clip_processor
         else:
             self.clip_model, self.clip_processor = load_clip_model()
+        self._claude_client = None
+        self._setup_claude()
+
+    def _setup_claude(self):
+        import os
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if api_key:
+            try:
+                import anthropic
+                self._claude_client = anthropic.Anthropic(api_key=api_key)
+                logger.info("Claude Vision API ready for Title Admin classification")
+            except ImportError:
+                pass
+
+    def _classify_with_claude(self, image_path: str) -> Optional[str]:
+        """Try Claude Vision first. Returns label string or None on failure."""
+        if not self._claude_client:
+            return None
+        try:
+            import anthropic, base64
+            from io import BytesIO
+            img = Image.open(image_path)
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
+            if img.width > self._CLAUDE_MAX_WIDTH:
+                ratio = self._CLAUDE_MAX_WIDTH / img.width
+                img = img.resize((self._CLAUDE_MAX_WIDTH, int(img.height * ratio)), Image.LANCZOS)
+            buf = BytesIO()
+            img.save(buf, format='JPEG', quality=85)
+            image_data = base64.standard_b64encode(buf.getvalue()).decode('utf-8')
+
+            prompt = (
+                "You are classifying interior property photos for a county assessor's office.\n\n"
+                "Choose the single best label:\n\n"
+                "KITCHEN — kitchen with cabinets, appliances, countertops, or sink\n"
+                "LIVING ROOM — living room or lounge with sofa, chairs, or TV\n"
+                "BEDROOM — bedroom with a bed or mattress visible\n"
+                "BATHROOM — bathroom with toilet, tub, shower, or vanity\n"
+                "DINING ROOM — dining area with a table and chairs for eating\n"
+                "LAUNDRY ROOM — laundry room with washer, dryer, or utility sink\n"
+                "OFFICE — home office or study with desk and computer\n"
+                "DECK — outdoor deck, patio, or covered porch\n"
+                "EXTERIOR — any exterior view of the building or property\n"
+                "OTHER — only if the photo cannot be identified as any of the above\n\n"
+                "Rules:\n"
+                "- If a toilet, tub, or shower is visible → BATHROOM\n"
+                "- If a washer or dryer is visible → LAUNDRY ROOM\n"
+                "- If a bed is visible → BEDROOM\n"
+                "- EXTERIOR for any outdoor building shot\n\n"
+                "Reply with ONLY the label, nothing else."
+            )
+
+            response = self._claude_client.messages.create(
+                model=self._CLAUDE_MODEL,
+                max_tokens=20,
+                messages=[{"role": "user", "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_data}},
+                    {"type": "text", "text": prompt},
+                ]}],
+            )
+            raw = response.content[0].text.strip().upper()
+            if raw in self.CANONICAL_LABELS:
+                logger.info(f"Claude Vision (Title Admin): {raw}")
+                return raw
+        except Exception as e:
+            logger.warning(f"Claude Vision failed, falling back to CLIP: {e}")
+        return None
 
     def _load_clip_model(self):
         """Kept for backward compatibility — delegates to module-level loader."""
@@ -415,6 +485,11 @@ class ImageClassifier:
                 logger.warning(f"Could not load image: {image_path}")
                 return 'OTHER'
             
+            # Layer 0: Claude Vision (primary — most accurate)
+            claude_label = self._classify_with_claude(image_path)
+            if claude_label:
+                return claude_label
+
             # Step 1: Detect objects using CLIP
             detections = self._detect_objects(image)
             
