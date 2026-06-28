@@ -174,7 +174,8 @@ def _convert_heic_to_jpeg(source_path: Path, output_path: Path) -> bool:
         pillow_heif.register_heif_opener()
         img = Image.open(source_path)
         img = img.convert('RGB')
-        img.save(output_path, format='JPEG', quality=95, progressive=False)
+        img.save(output_path, format='JPEG', quality=95, progressive=False,
+                 exif=None, icc_profile=None, subsampling=0)
         logger.info(f"Converted HEIC → JPG via pillow-heif: {source_path.name}")
         return True
     except ImportError:
