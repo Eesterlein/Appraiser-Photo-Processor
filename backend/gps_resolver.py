@@ -10,6 +10,12 @@ import numpy as np
 from PIL import Image
 from PIL.ExifTags import GPSTAGS
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_DISTANCE_METERS = 200

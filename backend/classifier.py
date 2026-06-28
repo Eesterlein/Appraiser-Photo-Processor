@@ -6,6 +6,12 @@ from PIL import Image
 import torch
 import numpy as np
 
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 # Try to import CLIP for object detection and classification
