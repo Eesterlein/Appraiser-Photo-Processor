@@ -1,5 +1,7 @@
 """Appraiser mode processing pipeline."""
 import logging
+import shutil
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
@@ -55,6 +57,9 @@ def process_folder_appraiser(
     results: List[Dict] = []
     unresolved_results: List[Dict] = []
 
+    # Temp dir for non-JPEG conversions — keeps intermediate files out of output folder
+    temp_dir = Path(tempfile.mkdtemp(prefix="appraiser_convert_"))
+
     image_extensions = {
         '.jpg', '.jpeg', '.png', '.gif', '.bmp',
         '.tiff', '.webp', '.jfif', '.heic', '.heif',
@@ -85,12 +90,12 @@ def process_folder_appraiser(
         compass = extract_compass_direction(str(original_path))
         account_no, coords, failure_reason = gps_resolver.resolve(str(original_path))
 
-        # Convert non-JPEG to JPEG if needed
+        # Convert non-JPEG to JPEG if needed — use temp dir to avoid polluting output
         suffix_lower = original_path.suffix.lower()
         if suffix_lower in jpeg_extensions:
             working_path = original_path
         else:
-            converted_path = convert_to_jpeg(original_path, output)
+            converted_path = convert_to_jpeg(original_path, temp_dir)
             if converted_path:
                 working_path = converted_path
                 converted_count += 1
@@ -201,6 +206,9 @@ def process_folder_appraiser(
                 )
             else:
                 errors.append(f"Failed to copy unresolved: {rec['original_name']}")
+
+    # Clean up temp conversion files
+    shutil.rmtree(temp_dir, ignore_errors=True)
 
     processed_count = len(results)
     unresolved_count = len(unresolved_results)
