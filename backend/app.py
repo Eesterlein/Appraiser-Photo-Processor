@@ -1,5 +1,6 @@
 """Main application entry point for MLS Photo Processor."""
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -23,7 +24,30 @@ logger = logging.getLogger(__name__)
 DATA_DIR = Path(__file__).parent / "data"
 
 
+def _load_api_key():
+    """
+    Load the Anthropic API key.
+
+    Priority:
+    1. ANTHROPIC_API_KEY environment variable (set by IT or developer)
+    2. api_key.txt file next to the .exe / app.py (for shared drive deployments)
+    """
+    key = os.environ.get('ANTHROPIC_API_KEY', '').strip()
+    if key:
+        return
+
+    # Look for api_key.txt next to the executable (PyInstaller) or this script
+    exe_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+    key_file = exe_dir / 'api_key.txt'
+    if key_file.exists():
+        key = key_file.read_text().strip()
+        if key:
+            os.environ['ANTHROPIC_API_KEY'] = key
+            logger.info("API key loaded from api_key.txt")
+
+
 def main():
+    _load_api_key()
     logger.info("Starting MLS Photo Processor...")
 
     try:
