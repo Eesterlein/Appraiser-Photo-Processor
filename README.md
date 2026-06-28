@@ -83,8 +83,39 @@ python build.py
 
 The `.exe` will be in `dist/`. Set `ANTHROPIC_API_KEY` as a Windows system environment variable on the deployment machine.
 
+## Windows Deployment
+
+Build a standalone `.exe` with PyInstaller:
+
+```bash
+pip install pyinstaller
+python build.py
+```
+
+The `.exe` is self-contained — no Python, no extra installs needed on the deployment machine.
+
+Set the API key as a **Windows system environment variable** (not user-level):
+1. Open **System Properties → Advanced → Environment Variables**
+2. Under **System variables**, click New
+3. Name: `ANTHROPIC_API_KEY` / Value: your key
+4. Restart the machine
+
+If the API key is not set, the app falls back to a local CLIP model — still functional but less accurate.
+
+---
+
+## Documentation
+
+- [User Guide](USER_GUIDE.md) — step-by-step instructions for appraisers and title admins
+- [Technical Overview](TECHNICAL_OVERVIEW.md) — architecture, data flow, and implementation details
+- [IT Security Overview](IT_SECURITY.md) — for county IT departments evaluating deployment
+
+---
+
 ## Privacy & Security
 
-- The address shapefile and GPS matching run entirely locally — no property location data leaves the machine
-- Photos are only sent to the Anthropic API (Claude Vision) for classification in Appraiser mode
-- The API key is never stored in code or config files — always read from the environment variable
+- GPS-to-parcel matching runs entirely locally via a bundled shapefile — no coordinates leave the machine
+- Only photo content (resized to 1024px) is sent to the Anthropic API for classification
+- The API key is never stored in any file — always read from a system environment variable
+- Original photos are never modified or deleted
+- See [IT_SECURITY.md](IT_SECURITY.md) for the full security overview
