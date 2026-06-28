@@ -160,8 +160,38 @@ def _parse_gps_coord(coord_data, ref: str) -> Optional[float]:
         return None
 
 
-def _get_exif(img: Image.Image) -> Optional[dict]:
-    """Return EXIF tag dict from any image format (JPEG or HEIC/other)."""
+def _get_gps_ifd(img: Image.Image) -> Optional[dict]:
+    """
+    Return the GPS sub-IFD dict from any image format.
+
+    JPEG via _getexif(): tag 34853 is already an expanded dict.
+    HEIC via getexif(): tag 34853 is an IFD offset integer — must call get_ifd().
+    """
+    # JPEG path
+    try:
+        exif = img._getexif()
+        if exif:
+            gps = exif.get(34853)
+            if isinstance(gps, dict):
+                return gps
+    except (AttributeError, Exception):
+        pass
+
+    # HEIC / other formats path
+    try:
+        exif_obj = img.getexif()
+        if exif_obj:
+            gps = exif_obj.get_ifd(34853)
+            if gps:
+                return dict(gps)
+    except Exception:
+        pass
+
+    return None
+
+
+def _get_flat_exif(img: Image.Image) -> Optional[dict]:
+    """Return flat EXIF tag dict (for date and other non-IFD tags)."""
     try:
         data = img._getexif()
         if data:
@@ -186,13 +216,8 @@ def extract_gps_from_exif(image_path: str) -> Optional[Tuple[float, float]]:
     """
     try:
         img = Image.open(image_path)
-        exif_data = _get_exif(img)
+        gps_info_raw = _get_gps_ifd(img)
 
-        if not exif_data:
-            logger.debug(f"No EXIF data in {Path(image_path).name}")
-            return None
-
-        gps_info_raw = exif_data.get(34853)
         if not gps_info_raw:
             logger.debug(f"No GPS info in {Path(image_path).name}")
             return None
@@ -240,11 +265,7 @@ def extract_compass_direction(image_path: str) -> Optional[str]:
     """
     try:
         img = Image.open(image_path)
-        exif_data = _get_exif(img)
-        if not exif_data:
-            return None
-
-        gps_info_raw = exif_data.get(34853)
+        gps_info_raw = _get_gps_ifd(img)
         if not gps_info_raw:
             return None
 
@@ -282,7 +303,7 @@ def extract_date_from_exif(image_path: str) -> str:
     """
     try:
         img = Image.open(image_path)
-        exif_data = _get_exif(img)
+        exif_data = _get_flat_exif(img)
 
         if exif_data:
             date_str = exif_data.get(36867) or exif_data.get(306)
