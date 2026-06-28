@@ -160,6 +160,23 @@ def _parse_gps_coord(coord_data, ref: str) -> Optional[float]:
         return None
 
 
+def _get_exif(img: Image.Image) -> Optional[dict]:
+    """Return EXIF tag dict from any image format (JPEG or HEIC/other)."""
+    try:
+        data = img._getexif()
+        if data:
+            return data
+    except (AttributeError, Exception):
+        pass
+    try:
+        exif_obj = img.getexif()
+        if exif_obj:
+            return dict(exif_obj)
+    except Exception:
+        pass
+    return None
+
+
 def extract_gps_from_exif(image_path: str) -> Optional[Tuple[float, float]]:
     """
     Extract GPS coordinates from image EXIF data.
@@ -169,7 +186,7 @@ def extract_gps_from_exif(image_path: str) -> Optional[Tuple[float, float]]:
     """
     try:
         img = Image.open(image_path)
-        exif_data = img._getexif()
+        exif_data = _get_exif(img)
 
         if not exif_data:
             logger.debug(f"No EXIF data in {Path(image_path).name}")
@@ -223,7 +240,7 @@ def extract_compass_direction(image_path: str) -> Optional[str]:
     """
     try:
         img = Image.open(image_path)
-        exif_data = img._getexif()
+        exif_data = _get_exif(img)
         if not exif_data:
             return None
 
@@ -265,7 +282,7 @@ def extract_date_from_exif(image_path: str) -> str:
     """
     try:
         img = Image.open(image_path)
-        exif_data = img._getexif()
+        exif_data = _get_exif(img)
 
         if exif_data:
             date_str = exif_data.get(36867) or exif_data.get(306)
