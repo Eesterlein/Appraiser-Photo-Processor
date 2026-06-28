@@ -166,12 +166,57 @@ def rename_pdf(pdf_path: Path, account_no: str, output_dir: Path) -> Optional[Pa
         return None
 
 
+def _convert_heic_to_jpeg(source_path: Path, output_path: Path) -> bool:
+    """Convert a HEIC/HEIF file to JPEG. Returns True on success."""
+    # Try pillow-heif first (cross-platform)
+    try:
+        import pillow_heif
+        pillow_heif.register_heif_opener()
+        img = Image.open(source_path)
+        img = img.convert('RGB')
+        img.save(output_path, format='JPEG', quality=95, progressive=False)
+        logger.info(f"Converted HEIC → JPG via pillow-heif: {source_path.name}")
+        return True
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.warning(f"pillow-heif failed for {source_path.name}: {e}")
+
+    # sips fallback (macOS built-in)
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['sips', '-s', 'format', 'jpeg', str(source_path), '--out', str(output_path)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        logger.info(f"Converted HEIC → JPG via sips: {source_path.name}")
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    # ImageMagick fallback (Windows with HEIC codec)
+    try:
+        import subprocess
+        subprocess.run(
+            ['magick', str(source_path), '-quality', '95', str(output_path)],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+        )
+        logger.info(f"Converted HEIC → JPG via ImageMagick: {source_path.name}")
+        return True
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        pass
+
+    logger.error(f"All HEIC conversion methods failed for {source_path.name}")
+    return False
+
+
 def convert_to_jpeg(source_path: Path, output_dir: Path) -> Optional[Path]:
     """
     Convert image file to JPEG format silently with RealWare compatibility.
-    
-    Converts non-JPEG images (WEBP, PNG, JFIF, etc.) to baseline JPEG format.
+
+    Converts non-JPEG images (WEBP, PNG, HEIC, JFIF, etc.) to baseline JPEG format.
     Special handling for WEBP files: optimization is disabled to prevent Pillow bugs.
+    HEIC/HEIF files use pillow-heif, sips (macOS), or ImageMagick in that order.
     Ensures compatibility with RealWare by:
     - Converting to RGB mode
     - Saving as baseline JPEG (not progressive)
@@ -179,9 +224,9 @@ def convert_to_jpeg(source_path: Path, output_dir: Path) -> Optional[Path]:
     - Using high quality settings (quality=95)
     - Optimization and subsampling only applied to non-WEBP images
     - Creating JFIF-compatible JPEG files
-    
+
     Saves converted image only to output directory, original file remains untouched.
-    
+
     Args:
         source_path: Path to source image file
         output_dir: Directory to save converted JPEG (processed folder)
@@ -192,10 +237,23 @@ def convert_to_jpeg(source_path: Path, output_dir: Path) -> Optional[Path]:
     # Get original extension for logging (before try block for error handling)
     original_ext = source_path.suffix.upper()
     is_webp = original_ext in ['.WEBP', '.webp']
-    
+    is_heic = original_ext in ['.HEIC', '.HEIF']
+
     try:
         # Ensure output directory exists
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        # HEIC/HEIF requires special handling
+        if is_heic:
+            output_filename = f"{source_path.stem}.JPG"
+            output_path = output_dir / output_filename
+            counter = 1
+            while output_path.exists():
+                output_path = output_dir / f"{source_path.stem}_{counter}.JPG"
+                counter += 1
+            if _convert_heic_to_jpeg(source_path, output_path):
+                return output_path
+            return None
         
         # Force full pixel decode with robust fallback path for malformed WEBP files
         source_img = None

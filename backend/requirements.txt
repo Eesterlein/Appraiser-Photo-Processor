@@ -1,5 +1,6 @@
 pandas
 Pillow
+pillow-heif
 huggingface-hub
 transformers
 torch>=2.6.0

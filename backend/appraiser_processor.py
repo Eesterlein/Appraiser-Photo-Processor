@@ -57,7 +57,7 @@ def process_folder_appraiser(
 
     image_extensions = {
         '.jpg', '.jpeg', '.png', '.gif', '.bmp',
-        '.tiff', '.webp', '.jfif',
+        '.tiff', '.webp', '.jfif', '.heic', '.heif',
     }
     jpeg_extensions = {'.jpg', '.jpeg'}
 

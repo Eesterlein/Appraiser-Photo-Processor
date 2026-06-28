@@ -94,7 +94,7 @@ def process_folder(
     
     # Step 3: Scan folder for image files and convert non-JPEG images to processed folder
     logger.info(f"Scanning folder for image files: {folder}")
-    image_extensions = ['.jpg', '.jpeg', '.JPG', '.JPEG', '.png', '.PNG', '.gif', '.GIF', '.bmp', '.BMP', '.tiff', '.TIFF', '.webp', '.WEBP', '.jfif', '.JFIF']
+    image_extensions = ['.jpg', '.jpeg', '.JPG', '.JPEG', '.png', '.PNG', '.gif', '.GIF', '.bmp', '.BMP', '.tiff', '.TIFF', '.webp', '.WEBP', '.jfif', '.JFIF', '.heic', '.HEIC', '.heif', '.HEIF']
     jpeg_extensions = ['.jpg', '.jpeg', '.JPG', '.JPEG']
     image_files = []
     converted_count = 0
