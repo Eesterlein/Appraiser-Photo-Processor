@@ -82,43 +82,45 @@ def generate_unresolved_filename(original_name: str, date_str: str) -> str:
 
 
 def copy_and_rename_image(
-    source_path: Path, 
-    dest_dir: Path, 
+    source_path: Path,
+    dest_dir: Path,
     filename: str
 ) -> Optional[Path]:
     """
-    Copy image file and rename it according to naming convention.
-    
-    Args:
-        source_path: Path to source image file
-        dest_dir: Directory to copy image to
-        filename: New filename to use
-        
-    Returns:
-        Full path to copied file, or None if failed
+    Save image to dest_dir with the given filename, always re-encoding as a
+    RealWare-compatible baseline JPEG (progressive=False, no EXIF, no ICC profile).
+
+    Re-encoding every output file — even those already JPEG — ensures RealWare
+    accepts them. Progressive JPEGs from iPhones or other apps are silently
+    rejected by RealWare; baseline JPEGs are not.
     """
     try:
-        # Ensure output directory exists
         dest_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Handle filename collisions
+
         full_path = dest_dir / filename
         counter = 1
         base_name = filename.rsplit('.', 1)[0] if '.' in filename else filename
         ext = filename.rsplit('.', 1)[1] if '.' in filename else 'JPG'
-        
         while full_path.exists():
-            # Add counter before extension
-            new_filename = f"{base_name}_{counter}.{ext}"
-            full_path = dest_dir / new_filename
+            full_path = dest_dir / f"{base_name}_{counter}.{ext}"
             counter += 1
-        
-        # Copy file
-        shutil.copy2(source_path, full_path)
-        
+
+        img = Image.open(source_path)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        img.save(
+            full_path,
+            format='JPEG',
+            quality=95,
+            progressive=False,
+            subsampling=0,
+            exif=None,
+            icc_profile=None,
+        )
+
         logger.info(f"Copied and renamed image: {source_path.name} -> {full_path.name}")
         return full_path
-        
+
     except Exception as e:
         logger.error(f"Error copying image {source_path}: {e}")
         return None
