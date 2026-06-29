@@ -1,21 +1,40 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-block_cipher = None
-
 a = Analysis(
     ['backend/app.py'],
-    pathex=[],
+    pathex=['backend'],
     binaries=[],
     datas=[
         ('backend/data/Accounts_and_Parcel_Numbers.csv', 'data'),
+        ('backend/data/Address.dbf',                     'data'),
+        ('backend/data/Address.shp',                     'data'),
+        ('backend/data/Address.shx',                     'data'),
+        ('backend/data/Address.prj',                     'data'),
     ],
     hiddenimports=[
+        'tkinter',
+        'tkinter.ttk',
+        'tkinter.filedialog',
+        'tkinter.messagebox',
         'transformers',
+        'transformers.models.clip',
+        'transformers.models.clip.modeling_clip',
+        'transformers.models.clip.processing_clip',
         'torch',
+        'torchvision',
         'PIL',
+        'PIL.Image',
+        'pillow_heif',
+        'anthropic',
+        'httpx',
+        'httpx._transports.default',
+        'anyio',
+        'anyio._backends._asyncio',
+        'certifi',
+        'tokenizers',
         'pandas',
         'numpy',
-        'tkinter',
+        'struct',
     ],
     hookspath=[],
     hooksconfig={},
@@ -24,14 +43,16 @@ a = Analysis(
         'fastapi',
         'uvicorn',
         'playwright',
+        'matplotlib',
+        'scipy',
+        'IPython',
+        'jupyter',
+        'notebook',
     ],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure, a.zipped_data)
 
 exe = EXE(
     pyz,
@@ -40,19 +61,13 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='MLSPhotoProcessor',
+    name='AppraiserPhotoProcessor',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
-    console=False,  # Set to True for debugging, False for windowed app
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=None,  # Add icon path here if you have one
+    console=True,   # Shows a log window — change to False for final clean release
+    icon=None,
 )
-

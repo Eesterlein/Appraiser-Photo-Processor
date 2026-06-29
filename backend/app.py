@@ -21,7 +21,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DATA_DIR = Path(__file__).parent / "data"
+# When frozen by PyInstaller, bundled files are extracted to sys._MEIPASS
+if getattr(sys, 'frozen', False):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).parent
+
+DATA_DIR = BASE_DIR / "data"
 
 
 def _load_api_key():
