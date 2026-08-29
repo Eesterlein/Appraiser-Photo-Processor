@@ -1,5 +1,6 @@
 """Three-layer image classification: Hard rules → Heuristics → Hugging Face fallback."""
 import logging
+import re
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 from PIL import Image
@@ -735,13 +736,49 @@ class AppraisalClassifier:
             }],
         )
 
-        raw = response.content[0].text.strip().upper()
-        label = raw if raw in self.VALID_LABELS else 'OTHER'
+        # Extract text from the first text block — don't assume content[0] is text
+        # (a future SDK/model change could put another block type first).
+        raw_text = ""
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                raw_text = block.text
+                break
+
+        label = self._match_label(raw_text)
+        if label == 'OTHER' and raw_text.strip().upper() != 'OTHER':
+            # Model returned something we couldn't map to a label. Log the raw text
+            # so this is diagnosable instead of silently becoming OTHER.
+            logger.warning(f"Claude Vision unmatched response → OTHER. Raw: {raw_text!r}")
         logger.info(
             f"Claude Vision: {label} "
             f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'})"
         )
         return label
+
+    def _match_label(self, raw_text: str) -> str:
+        """
+        Map a raw Claude response to a valid label, tolerantly.
+
+        Handles the model returning the label with trailing punctuation, a prefix
+        like 'Label:', or wrapped in a short phrase ('an empty BEDROOM'). Falls back
+        to OTHER only when no known label appears in the response.
+        """
+        normalized = raw_text.strip().upper()
+        if normalized in self.VALID_LABELS:
+            return normalized
+
+        # Longest labels first so 'CORNER OF GARAGE' wins over 'GARAGE',
+        # 'CORNER OF SHED' over 'SHED', etc.
+        candidates = sorted(
+            (lbl for lbl in self.VALID_LABELS if lbl != 'OTHER'),
+            key=len,
+            reverse=True,
+        )
+        for lbl in candidates:
+            # Whole-phrase match (not mid-word), e.g. 'BEDROOM' in 'AN EMPTY BEDROOM.'
+            if re.search(r'(?<![A-Z])' + re.escape(lbl) + r'(?![A-Z])', normalized):
+                return lbl
+        return 'OTHER'
 
     def _classify_with_clip(self, image_path: str) -> str:
         """CLIP fallback classification."""

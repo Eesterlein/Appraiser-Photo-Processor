@@ -294,12 +294,15 @@ def extract_compass_direction(image_path: str) -> Optional[str]:
         return None
 
 
-def extract_date_from_exif(image_path: str) -> str:
+def extract_exif_date_optional(image_path: str) -> Optional[str]:
     """
-    Extract capture date from EXIF metadata.
+    Extract the real capture date from EXIF metadata, if present.
 
     Returns:
-        Date string in YYYYMMDD format. Falls back to today if not found.
+        Date string in YYYYMMDD format, or None if the image has no usable
+        EXIF capture date. Unlike extract_date_from_exif, this does NOT fall
+        back to today — callers that must distinguish a genuine capture date
+        from a fallback (e.g. the visible date stamp) use this.
     """
     try:
         img = Image.open(image_path)
@@ -314,6 +317,20 @@ def extract_date_from_exif(image_path: str) -> str:
                     return formatted
     except Exception as e:
         logger.debug(f"Error extracting date from {Path(image_path).name}: {e}")
+
+    return None
+
+
+def extract_date_from_exif(image_path: str) -> str:
+    """
+    Extract capture date from EXIF metadata.
+
+    Returns:
+        Date string in YYYYMMDD format. Falls back to today if not found.
+    """
+    formatted = extract_exif_date_optional(image_path)
+    if formatted:
+        return formatted
 
     today = date.today().strftime('%Y%m%d')
     logger.warning(f"No EXIF date in {Path(image_path).name}, using today: {today}")
