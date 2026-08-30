@@ -246,6 +246,14 @@ class MLSPhotoProcessorGUI:
             for error in result['errors']:
                 self._log(f"  - {error}")
 
+        usage = result.get('api_usage') or {}
+        if usage.get('api_calls'):
+            self._log(
+                f"Claude API: {usage['api_calls']} photos classified, "
+                f"est. cost ${usage['estimated_cost_usd']:.4f} this run"
+            )
+            self._log("(Estimate from token usage — see console.anthropic.com for actual billing.)")
+
         # Summary popup
         msg = f"Processing complete!\n\nProcessed: {result.get('processed_count', 0)} images\n"
         if role == "title_admin":
@@ -254,6 +262,8 @@ class MLSPhotoProcessorGUI:
             unresolved = result.get('unresolved_count', 0)
             if unresolved:
                 msg += f"\n{unresolved} image(s) could not be resolved — see processed/unresolved/ folder"
+        if usage.get('api_calls'):
+            msg += f"\nClaude API est. cost this run: ${usage['estimated_cost_usd']:.4f}"
         if result.get('errors'):
             msg += f"\n{len(result['errors'])} error(s) — check log for details."
 

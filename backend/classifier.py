@@ -570,6 +570,12 @@ class AppraisalClassifier:
 
     CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
+    # Haiku 4.5 pricing (USD per token) — for local cost estimation only.
+    # This is an estimate from token usage, not authoritative billing; the real
+    # spend is on console.anthropic.com. Update if the model or pricing changes.
+    _PRICE_INPUT_PER_TOKEN = 1.00 / 1_000_000
+    _PRICE_OUTPUT_PER_TOKEN = 5.00 / 1_000_000
+
     VALID_LABELS = {
         # Exterior labels
         'FRONT OF BUILDING', 'BACK OF BUILDING',
@@ -624,6 +630,10 @@ class AppraisalClassifier:
 
         self._clip_labels: List[str] = list(self._CLIP_PROMPTS.keys())
         self._clip_prompt_texts: List[str] = list(self._CLIP_PROMPTS.values())
+        # Lifetime API usage counters (for local cost estimation).
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.api_call_count = 0
         self._claude_client = None
         self._setup_claude()
 
@@ -736,6 +746,13 @@ class AppraisalClassifier:
             }],
         )
 
+        # Accumulate token usage for local cost estimation.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.total_input_tokens += getattr(usage, "input_tokens", 0) or 0
+            self.total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+            self.api_call_count += 1
+
         # Extract text from the first text block — don't assume content[0] is text
         # (a future SDK/model change could put another block type first).
         raw_text = ""
@@ -751,7 +768,8 @@ class AppraisalClassifier:
             logger.warning(f"Claude Vision unmatched response → OTHER. Raw: {raw_text!r}")
         logger.info(
             f"Claude Vision: {label} "
-            f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'})"
+            f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'}) "
+            f"[running est: ${self.estimated_cost_usd():.4f}, {self.api_call_count} calls]"
         )
         return label
 
@@ -779,6 +797,22 @@ class AppraisalClassifier:
             if re.search(r'(?<![A-Z])' + re.escape(lbl) + r'(?![A-Z])', normalized):
                 return lbl
         return 'OTHER'
+
+    def estimated_cost_usd(self) -> float:
+        """Estimated Claude API spend so far, from accumulated token usage."""
+        return (
+            self.total_input_tokens * self._PRICE_INPUT_PER_TOKEN
+            + self.total_output_tokens * self._PRICE_OUTPUT_PER_TOKEN
+        )
+
+    def usage_summary(self) -> Dict[str, Any]:
+        """Snapshot of lifetime API usage for this classifier instance."""
+        return {
+            "api_calls": self.api_call_count,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "estimated_cost_usd": round(self.estimated_cost_usd(), 4),
+        }
 
     def _classify_with_clip(self, image_path: str) -> str:
         """CLIP fallback classification."""

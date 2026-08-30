@@ -150,11 +150,30 @@ def process_folder_appraiser(
     unresolved_records = [r for r in valid_records if r['account_no'] is None]
 
     # --- Step 5: Classify and rename resolved images ---
+    batch_usage = {"api_calls": 0, "input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0}
     if resolved_records:
         logger.info(f"Classifying {len(resolved_records)} resolved images...")
         image_paths = [str(r['working_path']) for r in resolved_records]
         compass_cardinals = [r['compass'] for r in resolved_records]
+
+        # Snapshot API usage before/after this batch to report per-run cost.
+        usage_before = classifier.usage_summary()
         classifications = classifier.classify_images(image_paths, compass_cardinals)
+        usage_after = classifier.usage_summary()
+        batch_usage = {
+            "api_calls": usage_after["api_calls"] - usage_before["api_calls"],
+            "input_tokens": usage_after["input_tokens"] - usage_before["input_tokens"],
+            "output_tokens": usage_after["output_tokens"] - usage_before["output_tokens"],
+            "estimated_cost_usd": round(
+                usage_after["estimated_cost_usd"] - usage_before["estimated_cost_usd"], 4
+            ),
+        }
+        logger.info(
+            f"Claude Vision batch usage: {batch_usage['api_calls']} calls, "
+            f"{batch_usage['input_tokens']} in + {batch_usage['output_tokens']} out tokens, "
+            f"est ${batch_usage['estimated_cost_usd']:.4f} "
+            f"(session total est ${classifier.estimated_cost_usd():.4f})"
+        )
 
         # Map path → label
         path_to_label = {path: label for path, label in classifications}
@@ -245,12 +264,14 @@ def process_folder_appraiser(
     )
 
     return _build_result(
-        processed_count, unresolved_count, errors, skipped_files, results, unresolved_results
+        processed_count, unresolved_count, errors, skipped_files, results,
+        unresolved_results, api_usage=batch_usage
     )
 
 
 def _build_result(
-    processed_count, unresolved_count, errors, skipped_files, results, unresolved_results
+    processed_count, unresolved_count, errors, skipped_files, results,
+    unresolved_results, api_usage=None
 ) -> Dict:
     return {
         "processed_count": processed_count,
@@ -259,4 +280,7 @@ def _build_result(
         "skipped_files": skipped_files,
         "results": results,
         "unresolved_results": unresolved_results,
+        "api_usage": api_usage or {
+            "api_calls": 0, "input_tokens": 0, "output_tokens": 0, "estimated_cost_usd": 0.0
+        },
     }
