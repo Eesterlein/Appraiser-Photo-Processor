@@ -5,12 +5,57 @@ from pathlib import Path
 from typing import Optional
 import logging
 from io import BytesIO
-from PIL import Image, ImageFile
+from PIL import Image, ImageFile, ImageDraw, ImageFont
 
 # Enable truncated image loading to handle partially malformed WEBP files
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 logger = logging.getLogger(__name__)
+
+
+def _load_stamp_font(size: int):
+    """Load a TrueType font for the date stamp, falling back to the default font."""
+    for name in ('arial.ttf', 'Arial.ttf', 'DejaVuSans.ttf', 'LiberationSans-Regular.ttf'):
+        try:
+            return ImageFont.truetype(name, size)
+        except Exception:
+            continue
+    logger.warning("No TrueType font available for date stamp; using default font (small)")
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
+def _draw_date_stamp(img: Image.Image, text: str) -> Image.Image:
+    """
+    Draw `text` in the bottom-right corner, camera-stamp style (amber with a
+    black outline for legibility on any background). Scales with image size.
+
+    Drawn in raw pixel space to match copy_and_rename_image's output orientation.
+    """
+    try:
+        draw = ImageDraw.Draw(img)
+        w, h = img.size
+        font_size = max(16, int(h * 0.035))
+        font = _load_stamp_font(font_size)
+        if font is None:
+            return img
+        stroke = max(1, font_size // 10)
+        bbox = draw.textbbox((0, 0), text, font=font, stroke_width=stroke)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        margin = max(8, int(h * 0.02))
+        # Subtract bbox offset so the text sits flush against the margin.
+        x = w - margin - text_w - bbox[0]
+        y = h - margin - text_h - bbox[1]
+        draw.text(
+            (x, y), text, font=font,
+            fill=(255, 176, 0), stroke_width=stroke, stroke_fill=(0, 0, 0),
+        )
+    except Exception as e:
+        logger.error(f"Failed to draw date stamp '{text}': {e}")
+    return img
 
 
 def generate_filename(account_no: str, classification: str, index: int) -> str:
@@ -84,7 +129,8 @@ def generate_unresolved_filename(original_name: str, date_str: str) -> str:
 def copy_and_rename_image(
     source_path: Path,
     dest_dir: Path,
-    filename: str
+    filename: str,
+    stamp_text: Optional[str] = None,
 ) -> Optional[Path]:
     """
     Save image to dest_dir with the given filename, always re-encoding as a
@@ -93,6 +139,10 @@ def copy_and_rename_image(
     Re-encoding every output file — even those already JPEG — ensures RealWare
     accepts them. Progressive JPEGs from iPhones or other apps are silently
     rejected by RealWare; baseline JPEGs are not.
+
+    If stamp_text is provided, it is burned into the bottom-right corner of the
+    output image (originals are never modified). Used for the appraiser capture-date
+    stamp; leave None to copy without a stamp.
     """
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -108,13 +158,18 @@ def copy_and_rename_image(
         img = Image.open(source_path)
         if img.mode != 'RGB':
             img = img.convert('RGB')
+        if stamp_text:
+            img = _draw_date_stamp(img, stamp_text)
+        # Note: do NOT pass exif=None — Pillow >=10 raises
+        # "object of type 'NoneType' has no len()". Omitting the kwarg on a
+        # re-encode produces no EXIF anyway (Pillow won't re-embed it), which
+        # keeps the RealWare-compatible, metadata-free output intent.
         img.save(
             full_path,
             format='JPEG',
             quality=95,
             progressive=False,
             subsampling=0,
-            exif=None,
             icc_profile=None,
         )
 

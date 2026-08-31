@@ -1,5 +1,6 @@
 """Three-layer image classification: Hard rules → Heuristics → Hugging Face fallback."""
 import logging
+import re
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 from PIL import Image
@@ -569,6 +570,12 @@ class AppraisalClassifier:
 
     CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
+    # Haiku 4.5 pricing (USD per token) — for local cost estimation only.
+    # This is an estimate from token usage, not authoritative billing; the real
+    # spend is on console.anthropic.com. Update if the model or pricing changes.
+    _PRICE_INPUT_PER_TOKEN = 1.00 / 1_000_000
+    _PRICE_OUTPUT_PER_TOKEN = 5.00 / 1_000_000
+
     VALID_LABELS = {
         # Exterior labels
         'FRONT OF BUILDING', 'BACK OF BUILDING',
@@ -623,6 +630,10 @@ class AppraisalClassifier:
 
         self._clip_labels: List[str] = list(self._CLIP_PROMPTS.keys())
         self._clip_prompt_texts: List[str] = list(self._CLIP_PROMPTS.values())
+        # Lifetime API usage counters (for local cost estimation).
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.api_call_count = 0
         self._claude_client = None
         self._setup_claude()
 
@@ -735,13 +746,73 @@ class AppraisalClassifier:
             }],
         )
 
-        raw = response.content[0].text.strip().upper()
-        label = raw if raw in self.VALID_LABELS else 'OTHER'
+        # Accumulate token usage for local cost estimation.
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            self.total_input_tokens += getattr(usage, "input_tokens", 0) or 0
+            self.total_output_tokens += getattr(usage, "output_tokens", 0) or 0
+            self.api_call_count += 1
+
+        # Extract text from the first text block — don't assume content[0] is text
+        # (a future SDK/model change could put another block type first).
+        raw_text = ""
+        for block in response.content:
+            if getattr(block, "type", None) == "text":
+                raw_text = block.text
+                break
+
+        label = self._match_label(raw_text)
+        if label == 'OTHER' and raw_text.strip().upper() != 'OTHER':
+            # Model returned something we couldn't map to a label. Log the raw text
+            # so this is diagnosable instead of silently becoming OTHER.
+            logger.warning(f"Claude Vision unmatched response → OTHER. Raw: {raw_text!r}")
         logger.info(
             f"Claude Vision: {label} "
-            f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'})"
+            f"({'compass: ' + compass_cardinal if compass_cardinal else 'no compass'}) "
+            f"[running est: ${self.estimated_cost_usd():.4f}, {self.api_call_count} calls]"
         )
         return label
+
+    def _match_label(self, raw_text: str) -> str:
+        """
+        Map a raw Claude response to a valid label, tolerantly.
+
+        Handles the model returning the label with trailing punctuation, a prefix
+        like 'Label:', or wrapped in a short phrase ('an empty BEDROOM'). Falls back
+        to OTHER only when no known label appears in the response.
+        """
+        normalized = raw_text.strip().upper()
+        if normalized in self.VALID_LABELS:
+            return normalized
+
+        # Longest labels first so 'CORNER OF GARAGE' wins over 'GARAGE',
+        # 'CORNER OF SHED' over 'SHED', etc.
+        candidates = sorted(
+            (lbl for lbl in self.VALID_LABELS if lbl != 'OTHER'),
+            key=len,
+            reverse=True,
+        )
+        for lbl in candidates:
+            # Whole-phrase match (not mid-word), e.g. 'BEDROOM' in 'AN EMPTY BEDROOM.'
+            if re.search(r'(?<![A-Z])' + re.escape(lbl) + r'(?![A-Z])', normalized):
+                return lbl
+        return 'OTHER'
+
+    def estimated_cost_usd(self) -> float:
+        """Estimated Claude API spend so far, from accumulated token usage."""
+        return (
+            self.total_input_tokens * self._PRICE_INPUT_PER_TOKEN
+            + self.total_output_tokens * self._PRICE_OUTPUT_PER_TOKEN
+        )
+
+    def usage_summary(self) -> Dict[str, Any]:
+        """Snapshot of lifetime API usage for this classifier instance."""
+        return {
+            "api_calls": self.api_call_count,
+            "input_tokens": self.total_input_tokens,
+            "output_tokens": self.total_output_tokens,
+            "estimated_cost_usd": round(self.estimated_cost_usd(), 4),
+        }
 
     def _classify_with_clip(self, image_path: str) -> str:
         """CLIP fallback classification."""
