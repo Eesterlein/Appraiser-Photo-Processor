@@ -8,4 +8,5 @@ torchvision
 tqdm
 numpy
 anthropic
+cryptography
 pyinstaller

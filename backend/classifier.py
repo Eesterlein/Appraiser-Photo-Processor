@@ -79,7 +79,12 @@ class ImageClassifier:
 
     def _setup_claude(self):
         import os
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        from key_loader import load_api_key
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+        if not api_key:
+            api_key = load_api_key()
         if api_key:
             try:
                 import anthropic
@@ -639,7 +644,12 @@ class AppraisalClassifier:
 
     def _setup_claude(self):
         import os
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        from key_loader import load_api_key
+
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
+
+        if not api_key:
+            api_key = load_api_key()
         if api_key:
             try:
                 import anthropic

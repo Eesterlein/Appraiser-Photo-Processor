@@ -62,3 +62,5 @@ processed/
 
 # API key file — never commit this
 api_key.txt
+
+apikey.enc
