@@ -114,15 +114,15 @@ def copy_and_rename_image(
             quality=95,
             progressive=False,
             subsampling=0,
-            exif=None,
-            icc_profile=None,
+            exif=b"",
+            icc_profile=b"",
         )
 
         logger.info(f"Copied and renamed image: {source_path.name} -> {full_path.name}")
         return full_path
 
     except Exception as e:
-        logger.error(f"Error copying image {source_path}: {e}")
+        logger.exception(f"Error copying image {source_path}")
         return None
 
 
@@ -177,13 +177,13 @@ def _convert_heic_to_jpeg(source_path: Path, output_path: Path) -> bool:
         img = Image.open(source_path)
         img = img.convert('RGB')
         img.save(output_path, format='JPEG', quality=95, progressive=False,
-                 exif=None, icc_profile=None, subsampling=0)
+                 exif=b"", icc_profile=b"", subsampling=0)
         logger.info(f"Converted HEIC → JPG via pillow-heif: {source_path.name}")
         return True
     except ImportError:
         pass
     except Exception as e:
-        logger.warning(f"pillow-heif failed for {source_path.name}: {e}")
+        logger.exception(f"pillow-heif failed for {source_path.name}")
 
     # sips fallback (macOS built-in)
     try:
@@ -312,8 +312,8 @@ def convert_to_jpeg(source_path: Path, output_dir: Path) -> Optional[Path]:
             format="JPEG",
             quality=95,
             progressive=False,  # Baseline JPEG, not progressive - required for RealWare
-            exif=None,          # Strip EXIF metadata
-            icc_profile=None    # Strip ICC color profiles
+            exif=b"",          # Strip EXIF metadata
+            icc_profile=b""    # Strip ICC color profiles
         )
         
         # Pillow bug: WEBP-derived images crash with optimize/subsampling
