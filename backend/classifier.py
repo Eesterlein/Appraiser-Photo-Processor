@@ -759,17 +759,30 @@ class AppraisalClassifier:
         except anthropic.APIStatusError as e:
             # TEMPORARY — 2026-09 400 Bad Request investigation. Remove once
             # resolved. Logs only the error's own structured fields (status,
-            # Anthropic's error type/message, request id) — never the request
-            # headers (which carry the API key) or the image data.
+            # Anthropic's error type/message, request id, raw response text) —
+            # never the request headers (which carry the API key) or image data.
+            # anthropic==1.4.0's exception attributes differ from the older SDK
+            # this code was originally written against, so we try several
+            # extraction paths defensively rather than assume one attribute name.
             request_id = getattr(e, "request_id", None)
-            if not request_id:
-                resp = getattr(e, "response", None)
+            resp = getattr(e, "response", None)
+            if not request_id and resp is not None:
                 headers = getattr(resp, "headers", {}) or {}
                 request_id = headers.get("request-id") or headers.get("x-request-id")
+
             error_body = getattr(e, "body", None)
+
+            raw_text = None
+            if resp is not None:
+                try:
+                    raw_text = resp.text
+                except Exception as read_err:
+                    raw_text = f"<could not read response.text: {read_err!r}>"
+
             logger.error(
                 f"Claude API error — status={e.status_code} "
-                f"request_id={request_id} body={error_body}"
+                f"request_id={request_id} body={error_body!r} "
+                f"raw_response={raw_text!r} str(e)={str(e)!r}"
             )
             raise
 
