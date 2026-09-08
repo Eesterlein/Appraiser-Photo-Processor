@@ -737,24 +737,41 @@ class AppraisalClassifier:
 
         image_data, media_type = self._prepare_image_for_claude(image_path)
 
-        response = self._claude_client.messages.create(
-            model=self.CLAUDE_MODEL,
-            max_tokens=20,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": image_data,
+        try:
+            response = self._claude_client.messages.create(
+                model=self.CLAUDE_MODEL,
+                max_tokens=20,
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": image_data,
+                            },
                         },
-                    },
-                    {"type": "text", "text": prompt},
-                ],
-            }],
-        )
+                        {"type": "text", "text": prompt},
+                    ],
+                }],
+            )
+        except anthropic.APIStatusError as e:
+            # TEMPORARY — 2026-09 400 Bad Request investigation. Remove once
+            # resolved. Logs only the error's own structured fields (status,
+            # Anthropic's error type/message, request id) — never the request
+            # headers (which carry the API key) or the image data.
+            request_id = getattr(e, "request_id", None)
+            if not request_id:
+                resp = getattr(e, "response", None)
+                headers = getattr(resp, "headers", {}) or {}
+                request_id = headers.get("request-id") or headers.get("x-request-id")
+            error_body = getattr(e, "body", None)
+            logger.error(
+                f"Claude API error — status={e.status_code} "
+                f"request_id={request_id} body={error_body}"
+            )
+            raise
 
         # Accumulate token usage for local cost estimation.
         usage = getattr(response, "usage", None)
