@@ -3,6 +3,7 @@ import base64
 import getpass
 import sys
 from pathlib import Path
+from typing import Optional
 from cryptography.fernet import Fernet
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
@@ -34,12 +35,21 @@ def _get_base_dir() -> Path:
         return Path(__file__).parent.parent
 
 
-def load_api_key() -> str:
+def load_api_key() -> Optional[str]:
     """
     Decrypts apikey.enc using a passphrase entered by the user.
     Looks for apikey.enc in the same folder as the .exe (or project root
     when running as a script). Caches the decrypted key in memory so the
     passphrase is only asked once per run.
+
+    Returns None if apikey.enc doesn't exist, so callers (classifier.py's
+    _setup_claude) fall back to CLIP the same way they do when
+    ANTHROPIC_API_KEY isn't set — matching behavior on any machine (dev,
+    CI, a fresh office install) where no key has been configured yet at
+    all. If apikey.enc DOES exist but the passphrase is wrong three times,
+    that's a different situation (a key is configured but inaccessible)
+    and still exits, since silently degrading to CLIP there could mask a
+    real credential problem.
     """
     global _cached_key
     if _cached_key:
@@ -48,8 +58,8 @@ def load_api_key() -> str:
     enc_path = _get_base_dir() / "apikey.enc"
 
     if not enc_path.exists():
-        print(f"Could not find apikey.enc at {enc_path}")
-        sys.exit(1)
+        print(f"No apikey.enc found at {enc_path} — falling back to CLIP.")
+        return None
 
     with open(enc_path, "rb") as f:
         data = f.read()
